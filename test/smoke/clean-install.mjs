@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { registerHooks } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const source = fileURLToPath(new URL("../../", import.meta.url));
@@ -88,9 +89,16 @@ const entryLoader = createJiti(import.meta.url, {
 const entryStarted = performance.now();
 const [extensionEntry] = JSON.parse(fs.readFileSync(path.join(installed, "package.json"), "utf8")).pi.extensions;
 assert.equal(extensionEntry, "./bundle/index.js", "Pi must load the bundled extension entry");
+// A bundle module that imported its compiled copy would load that module's state a second time.
+const loadedUrls = [];
+registerHooks({ load(url, context, next) { loadedUrls.push(url); return next(url, context); } });
 const entry = await entryLoader.import(path.join(installed, extensionEntry));
 assert.equal(typeof entry.default, "function", "bundled extension entry must export its factory");
 console.log(`PASS bundled package entry loaded through Jiti in ${Math.round(performance.now() - entryStarted)} ms`);
+for (const file of fs.readdirSync(path.join(installed, "bundle"))) await entryLoader.import(path.join(installed, "bundle", file));
+const compiledSource = pathToFileURL(path.join(fs.realpathSync(installed), "src")).href + "/";
+assert.deepEqual(loadedUrls.filter((url) => url.startsWith(compiledSource)), [], "bundled modules must not load compiled modules");
+console.log("PASS bundled entry, subpath exports and lazy chunks load no compiled module");
 for (const file of ["sdk-child.ts", "sdk-extension.ts"]) fs.copyFileSync(new URL(file, import.meta.url), path.join(cwd, file));
 const childEnv = {
 	SMOKE_EXTENSION: installed,
